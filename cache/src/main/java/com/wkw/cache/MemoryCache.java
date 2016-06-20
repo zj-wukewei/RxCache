@@ -19,10 +19,8 @@ public class MemoryCache implements ICache{
     private LruCache<String, String> mCache;
 
     public MemoryCache() {
-        //获取系统分配给每个应用程序的最大内存，每个应用系统分配32M
         final int maxMemory = (int) Runtime.getRuntime().maxMemory();
         final int cacheSize = maxMemory / 8;
-        //给LruCache分配1/8 4M
         mCache = new LruCache<String, String>(cacheSize) {
             @Override
             protected int sizeOf(String key, String value) {
