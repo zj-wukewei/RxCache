@@ -6,11 +6,17 @@ import android.util.Log;
 import com.google.gson.Gson;
 
 import java.io.BufferedReader;
+import java.io.Closeable;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.io.Reader;
+import java.io.StreamCorruptedException;
 import java.io.Writer;
 
 import rx.Observable;
@@ -24,7 +30,8 @@ import rx.schedulers.Schedulers;
 public class DiskCache implements ICache{
 
     private static final String NAME = ".db";
-    public static long CACHE_TIME = 1 * 60 * 1000;
+    public static long OTHER_CACHE_TIME = 1 * 60 * 1000;
+    public static long WIFI_CACHE_TIME = 1 * 60 * 1000;
     File fileDir;
     public DiskCache() {
         fileDir = CacheLoader.getApplication().getCacheDir();
@@ -36,16 +43,15 @@ public class DiskCache implements ICache{
             @Override
             public void call(Subscriber<? super T> subscriber) {
 
-                String diskData = getDiskData(key + NAME);
+                T t = (T) getDiskData1(key + NAME);
 
                 if (subscriber.isUnsubscribed()) {
                     return;
                 }
 
-                if (diskData == null || TextUtils.isEmpty(diskData)) {
+                if (t == null) {
                     subscriber.onNext(null);
                 } else {
-                    T t = new Gson().fromJson(diskData, cls);
                     subscriber.onNext(t);
                 }
 
@@ -63,9 +69,9 @@ public class DiskCache implements ICache{
             @Override
             public void call(Subscriber<? super T> subscriber) {
 
-                save(key + NAME, new Gson().toJson(t));
+                boolean isSuccess = isSave(key + NAME, t);
 
-                if (!subscriber.isUnsubscribed()) {
+                if (!subscriber.isUnsubscribed() && isSuccess) {
 
                     subscriber.onNext(t);
                     subscriber.onCompleted();
@@ -76,68 +82,89 @@ public class DiskCache implements ICache{
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe();
     }
+
     /**
      * 保存数据
      */
-    private void save(String fileName, String data) {
-        File dataFile = new File(fileDir, fileName);
+    private <T> boolean isSave(String fileName, T t) {
+        File file = new File(fileDir, fileName);
+
+        ObjectOutputStream objectOut = null;
+        boolean isSuccess = false;
         try {
-            if (!dataFile.exists()) {
-                try {
-                    dataFile.createNewFile();
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-            }
-            Writer writer = new FileWriter(dataFile);
-            writer.write(data);
-            writer.flush();
+            FileOutputStream out = new FileOutputStream(file);
+                    objectOut = new ObjectOutputStream(out);
+            objectOut.writeObject(t);
+            objectOut.flush();
+            isSuccess=true;
         } catch (IOException e) {
-            e.printStackTrace();
+            Log.e("写入缓存错误",e.getMessage());
+        } catch (Exception e) {
+            Log.e("写入缓存错误",e.getMessage());
+        } finally {
+            closeSilently(objectOut);
         }
+        return isSuccess;
     }
 
     /**
      * 获取保存的数据
      */
-    private  String getDiskData(String fileName) {
-        File dataFile = new File(fileDir, fileName);
+    private Object getDiskData1(String fileName) {
+        File file = new File(fileDir, fileName);
 
-        if (isCacheDataFailure(dataFile)) {
+        if (isCacheDataFailure(file)) {
             return null;
         }
 
-        if (!dataFile.exists()) {
-           return null;
+        if (!file.exists()) {
+            return null;
         }
-
+        Object o = null;
+        ObjectInputStream read = null;
         try {
-            Reader reader = new FileReader(dataFile);
-            BufferedReader r = new BufferedReader(reader);
-            StringBuilder b = new StringBuilder();
-            String line;
-            while((line = r.readLine())!=null) {
-                b.append(line);
-                b.append("\r\n");
-            }
+            read = new ObjectInputStream(new FileInputStream(file));
+            o = read.readObject();
+        } catch (StreamCorruptedException e) {
+            Log.e("读取错误", e.getMessage());
+        } catch (IOException e) {
+            Log.e("读取错误", e.getMessage());
+        } catch (ClassNotFoundException e) {
+            Log.e("错误", e.getMessage());
+        } finally {
+            closeSilently(read);
+        }
+        return o;
+    }
 
-            return  b.toString();
-        } catch (Exception e) {
-            e.printStackTrace();
-            return null;
+
+
+    private void closeSilently(Closeable closeable) {
+        if (closeable != null) {
+            try {
+                closeable.close();
+            } catch (Exception ignored) {
+            }
         }
     }
+
+
 
     /**
      * 判断缓存是否已经失效
      */
-    public  boolean isCacheDataFailure(File dataFile) {
+    private boolean isCacheDataFailure(File dataFile) {
         if (!dataFile.exists()) {
             return false;
         }
         long existTime = System.currentTimeMillis() - dataFile.lastModified();
         boolean failure = false;
-        failure = existTime > CACHE_TIME ? true : false;
+        if (NetWorkUtls.getNetworkType(CacheLoader.getApplication()) == NetWorkUtls.NETTYPE_WIFI) {
+            failure = existTime > WIFI_CACHE_TIME ? true : false;
+        } else {
+            failure = existTime > OTHER_CACHE_TIME ? true : false;
+        }
+
         return failure;
     }
 
